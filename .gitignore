@@ -1,0 +1,13 @@
+.gradle/
+build/
+*/build/
+local.properties
+.idea/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+xcuserdata/
+iosApp/iosApp.xcodeproj/project.xcworkspace/xcshareddata/
+Pods/
+*.hprof
