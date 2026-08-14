@@ -4,23 +4,15 @@ Kotlin client for the [fastrelay](https://fastrelay.io) activity feeds platform.
 
 ## Add the SDK
 
-Until the SDK is published to Maven Central, consume it via an included build. In your project's `settings.gradle.kts`:
-
-```kotlin
-includeBuild("path/to/fastrelay-kotlin-sdk") {
-    dependencySubstitution {
-        substitute(module("io.fastrelay:sdk")).using(project(":sdk"))
-    }
-}
-```
-
-Then in your module:
+The SDK is published to Maven Central:
 
 ```kotlin
 dependencies {
-    implementation("io.fastrelay:sdk:0.1.0")
+    implementation("io.fastrelay:fastrelay-kotlin-sdk:0.1.0")
 }
 ```
+
+In a multiplatform project, add it to `commonMain`; Gradle resolves the right target artifact (Android, iOS, JVM) automatically.
 
 ## Quickstart
 
@@ -112,6 +104,6 @@ Bytes are held in memory — fine for clips, not for multi-GB files. A streaming
 
 ## Targets
 
-`:sdk` compiles for `androidTarget`, `iosArm64`, `iosSimulatorArm64`, and `jvm` (desktop declared, not verified). The iOS binary is a static `FastrelaySDK` framework; consumers can re-export it through an umbrella framework via `api`/`export` so Swift sees unmangled SDK types. Maven publishing and the binary-compat guard are next.
+`:sdk` compiles for `androidTarget`, `iosArm64`, `iosSimulatorArm64`, and `jvm` (desktop declared, not verified). The iOS binary is a static `FastrelaySDK` framework; consumers can re-export it through an umbrella framework via `api`/`export` so Swift sees unmangled SDK types.
 
 Certificate pinning is intentionally out of scope — inject your own preconfigured engine via the `engine` constructor parameter if you need it.

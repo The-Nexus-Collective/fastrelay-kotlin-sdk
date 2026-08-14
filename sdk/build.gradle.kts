@@ -75,7 +75,7 @@ mavenPublishing {
     if (providers.gradleProperty("signingInMemoryKey").isPresent) {
         signAllPublications()
     }
-    coordinates(group.toString(), "sdk", version.toString())
+    coordinates(group.toString(), "fastrelay-kotlin-sdk", version.toString())
     pom {
         name.set("fastrelay Kotlin SDK")
         description.set("Kotlin Multiplatform client for the fastrelay activity feeds platform: Android, iOS, and JVM.")
