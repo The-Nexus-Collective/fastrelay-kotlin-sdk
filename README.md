@@ -20,7 +20,7 @@ In a multiplatform project, add it to `commonMain`; Gradle resolves the right ta
 import io.fastrelay.sdk.FastrelayClient
 
 val client = FastrelayClient(
-    baseUrl = "http://localhost:8080",
+    baseUrl = "https://api.fastrelay.io",
     // Called whenever a fresh user token is needed (first connect, 401, WS close 4003).
     // This must call YOUR backend, which holds the api_secret and mints user tokens
     // via POST /v1/tokens. The SDK itself is client-only and never sees the secret.
