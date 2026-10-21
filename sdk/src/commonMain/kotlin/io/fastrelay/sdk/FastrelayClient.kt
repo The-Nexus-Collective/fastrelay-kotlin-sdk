@@ -275,8 +275,8 @@ class FastrelayClient(
     fun feed(group: String, id: String): FastrelayFeed = FastrelayFeed(this, group, id)
 
     @Throws(FastrelayApiError::class, CancellationException::class)
-    suspend fun getOrCreateFeed(group: String, id: String, userId: String? = null): FastrelayFeed {
-        requestUnit(HttpMethod.Post, "/v1/feeds/${enc(group)}/${enc(id)}", body = CreateFeedRequest(userId))
+    suspend fun getOrCreateFeed(group: String, id: String, userId: String? = null, visibility: String? = null): FastrelayFeed {
+        requestUnit(HttpMethod.Post, "/v1/feeds/${enc(group)}/${enc(id)}", body = CreateFeedRequest(userId, visibility))
         return FastrelayFeed(this, group, id)
     }
 
