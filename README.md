@@ -8,7 +8,7 @@ The SDK is published to Maven Central:
 
 ```kotlin
 dependencies {
-    implementation("io.fastrelay:fastrelay-kotlin-sdk:0.1.0")
+    implementation("io.fastrelay:fastrelay-kotlin-sdk:0.2.0")
 }
 ```
 
