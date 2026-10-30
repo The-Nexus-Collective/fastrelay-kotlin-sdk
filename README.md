@@ -86,6 +86,17 @@ On Darwin (iOS), Apple's WebSocket stack occasionally reports `1006` instead of 
 
 Non-loopback plaintext `http` base URLs log a warning at client construction — the derived `ws://` URL carries the token where the exposure is worst.
 
+## File upload
+
+`uploadFileDirect` sends an image or video straight to storage: it reserves the file, PUTs the bytes to a presigned URL and confirms the upload. The content type must be an `image/*` or `video/*` type that matches the bytes:
+
+```kotlin
+val file = client.uploadFileDirect(photoBytes, contentType = "image/jpeg")
+println(file.url)
+```
+
+For other content types, `uploadFile(bytes, filename, mimeType)` uploads through the API as multipart.
+
 ## Video upload
 
 `uploadVideoBytes` mints a tus upload URL via the backend, then PATCHes the bytes directly to Cloudflare Stream (tus 1.0.0, 50MB chunks by default). The final `ready` state arrives via the realtime `video.ready` event, or by polling `getVideo(videoId)`:

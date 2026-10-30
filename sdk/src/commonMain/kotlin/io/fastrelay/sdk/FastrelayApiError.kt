@@ -28,6 +28,7 @@ class FastrelayApiError(
         const val CODE_REALTIME_REQUIRES_USER_TOKEN = "REALTIME_REQUIRES_USER_TOKEN"
         const val CODE_INVALID_FILE_NAME = "INVALID_FILE_NAME"
         const val CODE_VIDEO_UPLOAD_FAILED = "VIDEO_UPLOAD_FAILED"
+        const val CODE_FILE_UPLOAD_FAILED = "FILE_UPLOAD_FAILED"
         const val CODE_SUBSCRIPTION_LIMIT = "SUBSCRIPTION_LIMIT_EXCEEDED"
 
         fun local(code: String, message: String, hint: String? = null): FastrelayApiError =
