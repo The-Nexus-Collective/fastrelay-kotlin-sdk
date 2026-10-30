@@ -225,6 +225,70 @@ class EngagementSurfaceTest {
     }
 
     @Test
+    fun uploadFileDirectReservesPutsToStorageAndConfirms() = runTest {
+        // given
+        val uploadUrl = "https://bucket.spaces.test/feed/app_x/file_1.png?X-Amz-Credential=key%2F20261030%2Fams3&X-Amz-Signature=sig"
+        val engine = MockEngine { request ->
+            val json = headersOf(HttpHeaders.ContentType, "application/json")
+            when (request.url.encodedPath) {
+                "/v1/files/uploads" -> respond(
+                    """{"fileId":"file_1","uploadUrl":"$uploadUrl","requiredHeaders":{"content-type":"image/png","content-length":"3"},"expiresAt":"2026-10-30T10:15:00Z"}""",
+                    HttpStatusCode.OK,
+                    json,
+                )
+                "/feed/app_x/file_1.png" -> respond("", HttpStatusCode.OK)
+                "/v1/files/file_1/confirm" -> respond(fileJson, HttpStatusCode.OK, json)
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        }
+        val sdk = FastrelayClient(baseUrl = "http://localhost:8080", logger = {}, engine = engine)
+            .apply { updateToken("test-token") }
+
+        // when
+        val file = sdk.uploadFileDirect(byteArrayOf(1, 2, 3), contentType = "image/png")
+
+        // then
+        val (create, put, confirm) = engine.requestHistory
+        assertEquals("""{"contentType":"image/png","sizeBytes":3}""", create.body.toByteArray().decodeToString())
+        assertEquals(HttpMethod.Put, put.method)
+        assertEquals(uploadUrl, put.url.toString())
+        assertEquals("image/png", put.body.contentType.toString())
+        assertEquals(3L, put.body.contentLength)
+        assertNull(put.headers[HttpHeaders.Authorization])
+        assertEquals(HttpMethod.Post, confirm.method)
+        assertEquals("/v1/files/file_1/confirm", confirm.url.encodedPath)
+        assertEquals("file_1", file.id)
+    }
+
+    @Test
+    fun uploadFileDirectDoesNotConfirmWhenStorageRejectsThePut() = runTest {
+        // given
+        val engine = MockEngine { request ->
+            if (request.url.encodedPath == "/v1/files/uploads") {
+                respond(
+                    """{"fileId":"file_1","uploadUrl":"https://bucket.spaces.test/f.png","requiredHeaders":{"content-type":"image/png"},"expiresAt":"2026-10-30T10:15:00Z"}""",
+                    HttpStatusCode.OK,
+                    headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            } else {
+                respond("<Error>SignatureDoesNotMatch</Error>", HttpStatusCode.Forbidden)
+            }
+        }
+        val sdk = FastrelayClient(baseUrl = "http://localhost:8080", logger = {}, engine = engine)
+            .apply { updateToken("test-token") }
+
+        // when
+        val error = assertFailsWith<FastrelayApiError> {
+            sdk.uploadFileDirect(byteArrayOf(1, 2, 3), contentType = "image/png")
+        }
+
+        // then
+        assertEquals(403, error.status)
+        assertEquals(FastrelayApiError.CODE_FILE_UPLOAD_FAILED, error.code)
+        assertEquals(2, engine.requestHistory.size)
+    }
+
+    @Test
     fun createActivityWithPollStampsPollIdIntoCustomData() = runTest {
         // given
         val requests = mutableListOf<String>()

@@ -11,6 +11,7 @@ import io.fastrelay.sdk.internal.request.BatchGetRequest
 import io.fastrelay.sdk.internal.request.CreateActivityRequest
 import io.fastrelay.sdk.internal.request.CreateCommentRequest
 import io.fastrelay.sdk.internal.request.CreateFeedRequest
+import io.fastrelay.sdk.internal.request.CreateFileUploadRequest
 import io.fastrelay.sdk.internal.request.CreateFlagRequest
 import io.fastrelay.sdk.internal.request.CreateMuteRequest
 import io.fastrelay.sdk.internal.request.CreatePollRequest
@@ -36,6 +37,7 @@ import io.fastrelay.sdk.model.FastrelayFeedActivityPin
 import io.fastrelay.sdk.model.FastrelayFeedMember
 import io.fastrelay.sdk.model.FastrelayFeedback
 import io.fastrelay.sdk.model.FastrelayFile
+import io.fastrelay.sdk.model.FastrelayFileUpload
 import io.fastrelay.sdk.model.FastrelayFollow
 import io.fastrelay.sdk.model.FastrelayModerationFlag
 import io.fastrelay.sdk.model.FastrelayPoll
@@ -69,6 +71,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
+import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.URLBuilder
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLPathPart
@@ -662,6 +665,73 @@ class FastrelayClient(
         }
         return FastrelayJson.decodeFromString(response.bodyAsText())
     }
+
+    /**
+     * Uploads an image or video straight to storage instead of through the API: reserves
+     * the file, PUTs [bytes] to the presigned URL and confirms it. [contentType] must be an image or
+     * video type matching the bytes; use [uploadFile] for anything else.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun uploadFileDirect(
+        bytes: ByteArray,
+        contentType: String,
+        type: String? = null,
+        options: FastrelayRequestOptions? = null,
+    ): FastrelayFile {
+        val upload = createFileUpload(contentType, bytes.size.toLong(), type, options)
+        val response = try {
+            http.request(upload.uploadUrl) {
+                method = HttpMethod.Put
+                // Content-Type and Content-Length are unsafe headers in Ktor: the body carries
+                // both, and its length is exactly the signed size.
+                upload.requiredHeaders
+                    .filterKeys { !it.equals(HttpHeaders.ContentType, true) && !it.equals(HttpHeaders.ContentLength, true) }
+                    .forEach { (name, value) -> header(name, value) }
+                val signedType = upload.requiredHeaders.entries
+                    .firstOrNull { it.key.equals(HttpHeaders.ContentType, true) }?.value ?: contentType
+                setBody(ByteArrayContent(bytes, ContentType.parse(signedType)))
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            throw FastrelayApiError(
+                status = 0,
+                code = FastrelayApiError.CODE_NETWORK_ERROR,
+                message = "File upload to storage failed: ${error::class.simpleName ?: "network error"}.",
+            )
+        }
+        if (!response.status.isSuccess()) {
+            throw FastrelayApiError(
+                status = response.status.value,
+                code = FastrelayApiError.CODE_FILE_UPLOAD_FAILED,
+                message = "File upload to storage failed: ${response.status} ${response.bodyAsText()}".trim(),
+            )
+        }
+        return confirmFileUpload(upload.fileId, options)
+    }
+
+    /** Reserves a pending image or video file and returns a presigned PUT URL. Prefer [uploadFileDirect]. */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun createFileUpload(
+        contentType: String,
+        sizeBytes: Long,
+        type: String? = null,
+        options: FastrelayRequestOptions? = null,
+    ): FastrelayFileUpload =
+        requestJson(
+            HttpMethod.Post,
+            "/v1/files/uploads",
+            body = CreateFileUploadRequest(contentType, sizeBytes, type),
+            options = options,
+        )
+
+    /**
+     * Makes an uploaded file available. Fails with status 409 and code `FILE_NOT_UPLOADED`
+     * while the object is missing or incomplete; the call can be retried.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun confirmFileUpload(fileId: String, options: FastrelayRequestOptions? = null): FastrelayFile =
+        requestJson(HttpMethod.Post, "/v1/files/${enc(fileId)}/confirm", options = options)
 
     @Throws(FastrelayApiError::class, CancellationException::class)
     suspend fun getFile(fileId: String): FastrelayFile =
