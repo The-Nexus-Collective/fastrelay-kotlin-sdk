@@ -3,11 +3,14 @@ package io.fastrelay.sdk.realtime
 import io.fastrelay.sdk.FastrelayApiError
 import io.fastrelay.sdk.internal.JwtClaims
 import io.fastrelay.sdk.internal.Redaction
+import io.fastrelay.sdk.model.FastrelayChatEvent
+import io.fastrelay.sdk.model.FastrelayConnectionInfo
 import io.fastrelay.sdk.model.FastrelayRealtimeEvent
 import io.ktor.http.URLBuilder
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -55,6 +58,28 @@ class FastrelayRealtime internal constructor(
     private val _reconnected = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     val reconnected: SharedFlow<Unit> = _reconnected
 
+    /**
+     * Chat events (messages, conversation and member changes, receipts, typing, presence, unread totals)
+     * after dedup by `eventId`. They need no subscription: the server sends them to every connection
+     * of the recipient users. Feed events never appear here, and chat events never appear in [events].
+     */
+    private val _chatEvents = MutableSharedFlow<FastrelayChatEvent>(extraBufferCapacity = 256)
+    val chatEvents: SharedFlow<FastrelayChatEvent> = _chatEvents
+
+    /**
+     * Emits on every successful (re)connect with the server's `serverTime`. Keep the first one as the
+     * chat sync anchor and call `syncChat(since = anchor)` on later ones. Collect before [connect].
+     */
+    private val _connectionEstablished = MutableSharedFlow<FastrelayConnectionInfo>(extraBufferCapacity = 8)
+    val connectionEstablished: SharedFlow<FastrelayConnectionInfo> = _connectionEstablished
+
+    /**
+     * Server `error` frames, e.g. a rejected typing, delivered or read message. The connection stays
+     * open; these are not terminal (terminal failures surface in [connectionState]).
+     */
+    private val _errors = MutableSharedFlow<FastrelayApiError>(extraBufferCapacity = 32)
+    val errors: SharedFlow<FastrelayApiError> = _errors
+
     private val denials = MutableSharedFlow<String>(extraBufferCapacity = 32)
 
     private var loopJob: Job? = null
@@ -62,6 +87,7 @@ class FastrelayRealtime internal constructor(
     private var isSuspended = false
     private val pendingSubscribes = mutableSetOf<String>()
     private var flushJob: Job? = null
+    private var presenceRequested = false
 
     fun connect() {
         if (loopJob?.isActive == true) return
@@ -124,6 +150,61 @@ class FastrelayRealtime internal constructor(
         }
     }
 
+    /** Sends `typing.start`. Returns false (and sends nothing) when not connected. */
+    @Throws(IllegalArgumentException::class)
+    fun startTyping(conversationId: String): Boolean {
+        requireConversationId(conversationId)
+        return trySendFrame(RealtimeMessages.typingFrame(conversationId, started = true))
+    }
+
+    /** Sends `typing.stop`. Returns false (and sends nothing) when not connected. */
+    @Throws(IllegalArgumentException::class)
+    fun stopTyping(conversationId: String): Boolean {
+        requireConversationId(conversationId)
+        return trySendFrame(RealtimeMessages.typingFrame(conversationId, started = false))
+    }
+
+    /**
+     * Advances the delivery cursor to [seq] over the socket. Returns false (and sends nothing) when not
+     * connected; nothing is queued for later.
+     */
+    @Throws(IllegalArgumentException::class)
+    fun markDelivered(conversationId: String, seq: Long): Boolean {
+        requireConversationId(conversationId)
+        require(seq > 0) { "seq must be positive." }
+        return trySendFrame(RealtimeMessages.deliveredFrame(conversationId, seq))
+    }
+
+    /**
+     * Advances the read cursor to [seq], or to the latest message when null, over the socket. Returns
+     * false (and sends nothing) when not connected; fall back to `FastrelayClient.markConversationRead`.
+     */
+    @Throws(IllegalArgumentException::class)
+    fun markRead(conversationId: String, seq: Long? = null): Boolean {
+        requireConversationId(conversationId)
+        require(seq == null || seq > 0) { "seq must be positive." }
+        return trySendFrame(RealtimeMessages.readFrame(conversationId, seq))
+    }
+
+    /**
+     * Marks this connection as present (online) for chat presence. Sent now if connected and again after
+     * every reconnect, until `FastrelayClient.disconnectUser`. There is no stop message: going offline is
+     * disconnecting.
+     */
+    fun startPresence() {
+        presenceRequested = true
+        trySendFrame(RealtimeMessages.presenceStartFrame())
+    }
+
+    /** Clears per-user session state so the next user starts without presence. */
+    internal fun resetUserSession() {
+        presenceRequested = false
+    }
+
+    private fun requireConversationId(conversationId: String) {
+        require(conversationId.isNotBlank()) { "conversationId must not be blank." }
+    }
+
     private fun scheduleSubscribe(feedId: String) {
         pendingSubscribes += feedId
         if (flushJob?.isActive == true) return
@@ -138,9 +219,15 @@ class FastrelayRealtime internal constructor(
     }
 
     private fun sendFrame(frame: String) {
-        val connection = activeConnection ?: return
-        if (_connectionState.value !is ConnectionState.Connected) return
-        scope.launch { runCatching { connection.send(frame) } }
+        trySendFrame(frame)
+    }
+
+    private fun trySendFrame(frame: String): Boolean {
+        val connection = activeConnection ?: return false
+        if (_connectionState.value !is ConnectionState.Connected) return false
+        // Undispatched so frames hit the socket in call order (typing.start before typing.stop).
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { runCatching { connection.send(frame) } }
+        return true
     }
 
     private fun stopLoop(finalState: ConnectionState) {
@@ -275,6 +362,10 @@ class FastrelayRealtime internal constructor(
                                 if (active.isNotEmpty()) {
                                     runCatching { connection.send(RealtimeMessages.subscribeFrame(active)) }
                                 }
+                                if (presenceRequested) {
+                                    runCatching { connection.send(RealtimeMessages.presenceStartFrame()) }
+                                }
+                                _connectionEstablished.tryEmit(FastrelayConnectionInfo(frame.connectionId, frame.serverTime))
                                 _reconnected.tryEmit(Unit)
                                 keepaliveJob = launch { keepaliveLoop(connection) }
                             }
@@ -284,6 +375,19 @@ class FastrelayRealtime internal constructor(
                                 if (frame.event.eventId.isBlank() || dedup.isNew(frame.event.eventId)) {
                                     _events.tryEmit(frame.event)
                                 }
+                            is ServerFrame.Chat ->
+                                if (frame.event.eventId.isBlank() || dedup.isNew(frame.event.eventId)) {
+                                    _chatEvents.tryEmit(frame.event)
+                                }
+                            is ServerFrame.ServerError ->
+                                _errors.tryEmit(
+                                    FastrelayApiError(
+                                        status = 0,
+                                        code = frame.code ?: "REALTIME_ERROR",
+                                        message = frame.message ?: "Realtime server error.",
+                                        hint = frame.hint,
+                                    ),
+                                )
                             is ServerFrame.SubscribeError ->
                                 frame.deniedFeeds.forEach { denials.tryEmit(it) }
                             is ServerFrame.GoingAway -> {
