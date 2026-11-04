@@ -35,8 +35,8 @@ internal class FakeConnection(val url: String) : RealtimeConnection {
         channel.close()
     }
 
-    fun established(connectionId: String = "conn_1") {
-        serverSend("""{"type":"connection.established","connectionId":"$connectionId"}""")
+    fun established(connectionId: String = "conn_1", serverTime: String = "2026-08-05T10:00:00Z") {
+        serverSend("""{"type":"connection.established","connectionId":"$connectionId","serverTime":"$serverTime"}""")
     }
 
     fun heartbeat() {
@@ -50,6 +50,13 @@ internal class FakeConnection(val url: String) : RealtimeConnection {
     fun serverClose(code: Int?, reason: String? = null) {
         channel.trySend(TransportEvent.Closed(code, reason))
         channel.close()
+    }
+
+    fun chatEvent(type: String, eventId: String, conversationId: String? = "cnv_1", dataJson: String = "{}") {
+        val conversation = if (conversationId != null) ""","conversationId":"$conversationId"""" else ""
+        serverSend(
+            """{"type":"$type"$conversation,"eventId":"$eventId","createdAt":"2026-08-05T10:00:00Z","data":$dataJson}""",
+        )
     }
 
     fun event(feedId: String, type: String = "activity.created", eventId: String, dataJson: String = "{}") {

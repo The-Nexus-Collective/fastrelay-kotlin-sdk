@@ -6,7 +6,18 @@ import io.fastrelay.sdk.internal.Redaction
 import io.fastrelay.sdk.internal.TokenHolder
 import io.fastrelay.sdk.internal.defaultHttpEngine
 import io.fastrelay.sdk.internal.request.AddMemberRequest
+import io.fastrelay.sdk.internal.request.AddConversationMembersRequest
 import io.fastrelay.sdk.internal.request.BatchFollowRequest
+import io.fastrelay.sdk.internal.request.ChatSyncRequest
+import io.fastrelay.sdk.internal.request.ConversationFilterBody
+import io.fastrelay.sdk.internal.request.CreateConversationRequest
+import io.fastrelay.sdk.internal.request.MarkReadRequest
+import io.fastrelay.sdk.internal.request.QueryConversationsRequest
+import io.fastrelay.sdk.internal.request.SendMessageRequest
+import io.fastrelay.sdk.internal.request.TruncateConversationRequest
+import io.fastrelay.sdk.internal.request.UpdateConversationMemberRequest
+import io.fastrelay.sdk.internal.request.UpdateConversationRequest
+import io.fastrelay.sdk.internal.request.UpdateMessageRequest
 import io.fastrelay.sdk.internal.request.BatchGetRequest
 import io.fastrelay.sdk.internal.request.CreateActivityRequest
 import io.fastrelay.sdk.internal.request.CreateCommentRequest
@@ -30,6 +41,11 @@ import io.fastrelay.sdk.internal.request.VoteRequest
 import io.fastrelay.sdk.model.CursorPage
 import io.fastrelay.sdk.model.FastrelayActivity
 import io.fastrelay.sdk.model.FastrelayBookmark
+import io.fastrelay.sdk.model.FastrelayChatSync
+import io.fastrelay.sdk.model.FastrelayConversation
+import io.fastrelay.sdk.model.FastrelayConversationMember
+import io.fastrelay.sdk.model.FastrelayMessage
+import io.fastrelay.sdk.model.FastrelayUnreadTotals
 import io.fastrelay.sdk.model.FastrelayCapabilities
 import io.fastrelay.sdk.model.FastrelayComment
 import io.fastrelay.sdk.model.FastrelayCommentReaction
@@ -134,6 +150,7 @@ class FastrelayClient(
     fun updateToken(token: String) = tokenHolder.updateToken(token)
 
     fun close() {
+        realtimeInstance?.resetUserSession()
         http.close()
         scope.cancel()
     }
@@ -780,6 +797,7 @@ class FastrelayClient(
         )
     }
 
+    /** Flags content for moderation. [targetType] is e.g. `activity`, `comment`, `user` or `message` (chat). */
     @Throws(FastrelayApiError::class, CancellationException::class)
     suspend fun createFlag(
         targetType: String,
@@ -799,6 +817,11 @@ class FastrelayClient(
     suspend fun deleteFlag(flagId: String) =
         requestUnit(HttpMethod.Delete, "/v1/moderation/flags/${enc(flagId)}")
 
+    /**
+     * Mutes [userId]. [type] is `personal` (default) or `block`: a block hides the user like a personal
+     * mute and additionally hides typing and presence between the two users in chat. Remove and list
+     * blocks with the same `type`.
+     */
     @Throws(FastrelayApiError::class, CancellationException::class)
     suspend fun createMute(
         userId: String,
@@ -828,6 +851,207 @@ class FastrelayClient(
             "/v1/moderation/mutes",
             query = mapOf("type" to type, "limit" to limit.toString(), "cursor" to cursor),
         )
+
+    // Chat
+
+    /**
+     * Creates a group conversation, or a direct conversation with exactly one other member. An existing
+     * direct conversation between the same two users is returned instead of a new one.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun createConversation(
+        members: List<String>,
+        kind: String = "group",
+        type: String? = null,
+        name: String? = null,
+        image: String? = null,
+        custom: JsonObject? = null,
+        presenceEnabled: Boolean? = null,
+        options: FastrelayRequestOptions? = null,
+    ): FastrelayConversation =
+        requestJson(
+            HttpMethod.Post,
+            "/v1/conversations",
+            body = CreateConversationRequest(kind, type, members, name, image, custom, presenceEnabled),
+            options = options,
+        )
+
+    /**
+     * Lists the user's conversations. Filters: [kind], [type], [members] (contains all), [custom] (JSON
+     * containment), [frozen], [hasUnread]. [sort] is `lastMessageAt` (default), `createdAt`, `updatedAt` or
+     * `unreadCount`; [direction] `desc` (default) or `asc`.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun queryConversations(
+        kind: String? = null,
+        type: String? = null,
+        members: List<String>? = null,
+        custom: JsonObject? = null,
+        frozen: Boolean? = null,
+        hasUnread: Boolean? = null,
+        sort: String? = null,
+        direction: String? = null,
+        limit: Int? = null,
+        cursor: String? = null,
+    ): CursorPage<FastrelayConversation> {
+        val filter = ConversationFilterBody(kind, type, members, custom, frozen, hasUnread)
+        return requestJson(
+            HttpMethod.Post,
+            "/v1/conversations/query",
+            body = QueryConversationsRequest(
+                filter = filter.takeIf { it != ConversationFilterBody() },
+                sort = sort,
+                direction = direction,
+                limit = limit,
+                cursor = cursor,
+            ),
+        )
+    }
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun getConversation(conversationId: String): FastrelayConversation =
+        requestJson(HttpMethod.Get, "/v1/conversations/${enc(conversationId)}")
+
+    /** Changes only the provided fields. */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun updateConversation(
+        conversationId: String,
+        name: String? = null,
+        image: String? = null,
+        custom: JsonObject? = null,
+        presenceEnabled: Boolean? = null,
+        frozen: Boolean? = null,
+    ): FastrelayConversation =
+        requestJson(
+            HttpMethod.Patch,
+            "/v1/conversations/${enc(conversationId)}",
+            body = UpdateConversationRequest(name, image, custom, presenceEnabled, frozen),
+        )
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun deleteConversation(conversationId: String) =
+        requestUnit(HttpMethod.Delete, "/v1/conversations/${enc(conversationId)}")
+
+    /** Removes all messages so far. The server appends a system message unless [systemMessage] is false. */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun truncateConversation(conversationId: String, systemMessage: Boolean? = null): FastrelayConversation =
+        requestJson(
+            HttpMethod.Post,
+            "/v1/conversations/${enc(conversationId)}/truncate",
+            body = TruncateConversationRequest(systemMessage),
+        )
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun listConversationMembers(
+        conversationId: String,
+        limit: Int? = null,
+        cursor: String? = null,
+    ): CursorPage<FastrelayConversationMember> =
+        requestJson(
+            HttpMethod.Get,
+            "/v1/conversations/${enc(conversationId)}/members",
+            query = mapOf("limit" to limit?.toString(), "cursor" to cursor),
+        )
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun addConversationMembers(conversationId: String, userIds: List<String>): FastrelayConversation =
+        requestJson(
+            HttpMethod.Post,
+            "/v1/conversations/${enc(conversationId)}/members",
+            body = AddConversationMembersRequest(userIds),
+        )
+
+    /**
+     * Changes a member's [role] (`owner`, `moderator`, `member`) and/or [restriction] (`banned`, `muted`,
+     * or `none` to lift it), optionally until [restrictionExpiresAt] (ISO-8601).
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun updateConversationMember(
+        conversationId: String,
+        userId: String,
+        role: String? = null,
+        restriction: String? = null,
+        restrictionExpiresAt: String? = null,
+    ): FastrelayConversationMember =
+        requestJson(
+            HttpMethod.Patch,
+            "/v1/conversations/${enc(conversationId)}/members/${enc(userId)}",
+            body = UpdateConversationMemberRequest(role, restriction, restrictionExpiresAt),
+        )
+
+    /** Removes a member; pass the current user's id to leave the conversation. */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun removeConversationMember(conversationId: String, userId: String) =
+        requestUnit(HttpMethod.Delete, "/v1/conversations/${enc(conversationId)}/members/${enc(userId)}")
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun sendMessage(
+        conversationId: String,
+        text: String? = null,
+        custom: JsonObject? = null,
+        replyToId: String? = null,
+        silent: Boolean? = null,
+        options: FastrelayRequestOptions? = null,
+    ): FastrelayMessage =
+        requestJson(
+            HttpMethod.Post,
+            "/v1/conversations/${enc(conversationId)}/messages",
+            body = SendMessageRequest(text, custom, replyToId, silent),
+            options = options,
+        )
+
+    /**
+     * Lists messages in ascending seq order. [cursor] is an exclusive message seq (pass the page's
+     * `nextCursor`): [direction] `older` (default) pages back from it, `newer` pages forward. [around]
+     * returns a window of [limit] messages centred on that seq.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun listMessages(
+        conversationId: String,
+        cursor: String? = null,
+        direction: String? = null,
+        around: Long? = null,
+        limit: Int? = null,
+    ): CursorPage<FastrelayMessage> =
+        requestJson(
+            HttpMethod.Get,
+            "/v1/conversations/${enc(conversationId)}/messages",
+            query = mapOf(
+                "cursor" to cursor,
+                "direction" to direction,
+                "around" to around?.toString(),
+                "limit" to limit?.toString(),
+            ),
+        )
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun updateMessage(messageId: String, text: String? = null, custom: JsonObject? = null): FastrelayMessage =
+        requestJson(HttpMethod.Patch, "/v1/messages/${enc(messageId)}", body = UpdateMessageRequest(text, custom))
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun deleteMessage(messageId: String) =
+        requestUnit(HttpMethod.Delete, "/v1/messages/${enc(messageId)}")
+
+    /**
+     * Advances the read cursor to [seq], or to the latest message when null. For a fire-and-forget
+     * update over the open socket use `realtime.markRead`.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun markConversationRead(conversationId: String, seq: Long? = null): FastrelayUnreadTotals =
+        requestJson(HttpMethod.Post, "/v1/conversations/${enc(conversationId)}/read", body = MarkReadRequest(seq))
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun getUnreadTotals(): FastrelayUnreadTotals =
+        requestJson(HttpMethod.Get, "/v1/chat/unread")
+
+    /**
+     * Catches up after a reconnect. [since] is the `serverTime` from `realtime.connectionEstablished`
+     * or from the previous sync; [conversationIds] are the conversations held locally, so those the
+     * user lost access to come back in `removedConversationIds`.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun syncChat(since: String, conversationIds: List<String> = emptyList()): FastrelayChatSync =
+        requestJson(HttpMethod.Post, "/v1/chat/sync", body = ChatSyncRequest(since, conversationIds))
 
     @Throws(FastrelayApiError::class, CancellationException::class)
     suspend fun createActivityWithPoll(
@@ -890,6 +1114,7 @@ class FastrelayClient(
         val token = provider()
         // Realtime is bound to the previous user's token; drop it so events don't leak across users.
         realtimeInstance?.disconnect()
+        realtimeInstance?.resetUserSession()
         tokenHolder.updateToken(token)
         if (upsertUser) {
             createUser(id = userId, displayName = displayName)
@@ -899,6 +1124,7 @@ class FastrelayClient(
 
     fun disconnectUser() {
         realtimeInstance?.disconnect()
+        realtimeInstance?.resetUserSession()
         tokenHolder.clear()
     }
 

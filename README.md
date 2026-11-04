@@ -8,7 +8,7 @@ The SDK is published to Maven Central:
 
 ```kotlin
 dependencies {
-    implementation("io.fastrelay:fastrelay-kotlin-sdk:0.2.0")
+    implementation("io.fastrelay:fastrelay-kotlin-sdk:1.0.0")
 }
 ```
 
@@ -58,9 +58,12 @@ Failed requests throw `FastrelayApiError` with `status`, `code`, `message`, `det
 `client.realtime` exposes:
 
 - `connectionState: StateFlow<ConnectionState>` — `Disconnected / Connecting / Connected / Reconnecting / RefreshingToken / Suspended / Failed`
-- `events: SharedFlow<FastrelayRealtimeEvent>` — every event after transport-level dedup
+- `events: SharedFlow<FastrelayRealtimeEvent>` — every feed event (plus `video.*` status frames) after transport-level dedup
 - `eventsForFeed(feedId, type?)` — subscribes on the first collector, unsubscribes on the last (20 feeds max per connection)
 - `reconnected: SharedFlow<Unit>` — fires on every (re)connect; there is **no event replay**, so refresh your visible data over REST when it fires
+- `chatEvents: SharedFlow<FastrelayChatEvent>` — chat events (no subscription needed), see [Chat](#chat)
+- `connectionEstablished: SharedFlow<FastrelayConnectionInfo>` — `connectionId` and `serverTime` on every (re)connect
+- `errors: SharedFlow<FastrelayApiError>` — non-terminal server `error` frames (e.g. a rejected typing or read message)
 - `suspend()` / `resume()` — call from your app's background/foreground lifecycle
 - `connect()` / `disconnect()`
 
@@ -85,6 +88,68 @@ On Darwin (iOS), Apple's WebSocket stack occasionally reports `1006` instead of 
 **Security note — token in the URL:** the realtime handshake authenticates via `wss://…/v1/realtime?token=<jwt>`. Query strings routinely land in server access logs, proxy logs, and crash pipelines. The SDK redacts the token from its own errors and states, but for production deployments terminate TLS end-to-end, keep access logs away from third parties, and use short-lived tokens.
 
 Non-loopback plaintext `http` base URLs log a warning at client construction — the derived `ws://` URL carries the token where the exposure is worst.
+
+## Chat
+
+Direct and group conversations share the user, token and WebSocket with feeds.
+
+```kotlin
+val dm = client.createConversation(members = listOf("bo"), kind = "direct") // returns the existing DM if there is one
+val page = client.queryConversations(hasUnread = true, sort = "lastMessageAt", limit = 20)
+
+client.sendMessage(dm.id, text = "hi", options = FastrelayRequestOptions(idempotencyKey = localId))
+val history = client.listMessages(dm.id, limit = 50)                          // ascending seq, latest page
+val older = client.listMessages(dm.id, cursor = history.nextCursor)           // direction = "older" by default
+val around = client.listMessages(dm.id, around = 120, limit = 30)             // window around a seq
+
+client.markConversationRead(dm.id)            // REST, returns unread totals
+client.getUnreadTotals()
+```
+
+Members: `listConversationMembers`, `addConversationMembers`, `updateConversationMember` (role, `banned`/`muted`/`none`), `removeConversationMember` (your own id leaves). Conversations: `getConversation`, `updateConversation`, `truncateConversation`, `deleteConversation`. Messages: `updateMessage`, `deleteMessage`.
+
+**Realtime chat events** arrive on `realtime.chatEvents` without subscribing. Each `FastrelayChatEvent` has `type`, `conversationId` (absent for `presence.changed` and `unread.updated`), `eventId`, `createdAt`, the raw `data`, and typed accessors — `message`, `conversation`, `member`, `userId`, `userIds`, `online`, `lastActiveAt`, `lastDeliveredSeq`/`lastDeliveredAt`/`lastReadSeq`/`lastReadAt`, `totals` — that return null when absent. Unknown types are still delivered with their raw `data`.
+
+```kotlin
+client.realtime.chatEvents.collect { event ->
+    when (event.type) {
+        FastrelayChatEvent.MESSAGE_NEW -> store.upsert(event.message!!)
+        FastrelayChatEvent.TYPING_START -> showTyping(event.conversationId, event.userId)
+        FastrelayChatEvent.UNREAD_UPDATED -> badge(event.totals)
+    }
+}
+```
+
+**Typing, delivered, read** go over the socket and are fire-and-forget: they return `false` (and queue nothing) when the socket isn't connected, so fall back to `markConversationRead` for reads. Blank ids and non-positive `seq` throw `IllegalArgumentException`.
+
+```kotlin
+client.realtime.startTyping(conversationId)   // and stopTyping(conversationId)
+client.realtime.markDelivered(conversationId, seq = message.seq)
+if (!client.realtime.markRead(conversationId)) client.markConversationRead(conversationId)
+```
+
+**Presence:** call `client.realtime.startPresence()` to appear online. The SDK re-sends it after every reconnect until `disconnectUser()`; going offline is disconnecting. Online state shows up as `presence.changed` events and `online`/`lastActiveAt` on members of presence-enabled conversations.
+
+**Catching up after a reconnect:** there is no replay, so anchor a sync on `connectionEstablished`. Collect it before `connect()`:
+
+```kotlin
+var anchor: String? = null
+client.realtime.connectionEstablished.collect { info ->
+    val since = anchor
+    if (since == null) {
+        anchor = info.serverTime                       // first connect: load via queryConversations/listMessages
+    } else {
+        val sync = client.syncChat(since, conversationIds = store.conversationIds())
+        anchor = sync.serverTime
+        // apply sync.conversations / messages; drop removedConversationIds;
+        // reload reloadConversationIds, or everything when reloadAll
+    }
+}
+```
+
+**Blocking and flagging** reuse the moderation API: `createMute(userId, type = "block")`, `removeMute(userId, type = "block")`, `listMutes(type = "block")`; flag a message with `createFlag(targetType = "message", targetId = messageId, reason = "spam")`.
+
+The SDK keeps no local message store; caching, typing debounce/expiry and read-ack batching are up to the app.
 
 ## File upload
 
