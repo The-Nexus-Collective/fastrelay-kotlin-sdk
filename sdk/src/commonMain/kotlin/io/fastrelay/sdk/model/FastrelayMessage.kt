@@ -20,6 +20,13 @@ data class FastrelayMessage(
     val custom: JsonObject = JsonObject(emptyMap()),
     val replyToId: String? = null,
     val replyTo: FastrelayReplyPreview? = null,
+    /**
+     * Reaction type to the ids of the first 100 users who added it, in the order they reacted. Page
+     * the rest with `listMessageReactionUsers` when [reactionCounts] is higher.
+     */
+    val reactions: Map<String, List<String>> = emptyMap(),
+    /** Reaction type to the total number of users who added it. */
+    val reactionCounts: Map<String, Int> = emptyMap(),
     val editedAt: String? = null,
     val deletedAt: String? = null,
     val createdAt: String = "",

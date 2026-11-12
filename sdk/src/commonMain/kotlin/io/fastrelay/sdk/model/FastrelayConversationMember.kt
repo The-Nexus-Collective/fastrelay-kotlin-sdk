@@ -18,4 +18,6 @@ data class FastrelayConversationMember(
     val lastReadAt: String? = null,
     val online: Boolean? = null,
     val lastActiveAt: String? = null,
+    /** Your own notification setting (`muteConversation`); null on other members. */
+    val notificationsMuted: Boolean? = null,
 )

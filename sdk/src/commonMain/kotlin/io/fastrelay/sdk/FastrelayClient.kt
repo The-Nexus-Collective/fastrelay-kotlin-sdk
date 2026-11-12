@@ -16,6 +16,7 @@ import io.fastrelay.sdk.internal.request.QueryConversationsRequest
 import io.fastrelay.sdk.internal.request.SendMessageRequest
 import io.fastrelay.sdk.internal.request.TruncateConversationRequest
 import io.fastrelay.sdk.internal.request.UpdateConversationMemberRequest
+import io.fastrelay.sdk.internal.request.UpdateConversationNotificationsRequest
 import io.fastrelay.sdk.internal.request.UpdateConversationRequest
 import io.fastrelay.sdk.internal.request.UpdateMessageRequest
 import io.fastrelay.sdk.internal.request.BatchGetRequest
@@ -984,6 +985,29 @@ class FastrelayClient(
     suspend fun removeConversationMember(conversationId: String, userId: String) =
         requestUnit(HttpMethod.Delete, "/v1/conversations/${enc(conversationId)}/members/${enc(userId)}")
 
+    /**
+     * Turns off push notifications for the current user in this conversation. Messages still arrive
+     * and count as unread; the app's backend sees `notificationsMuted` on each `message.created`
+     * webhook and sends no push. Only you see the setting, as `notificationsMuted` on your member.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun muteConversation(conversationId: String): FastrelayConversationMember =
+        setConversationNotificationsMuted(conversationId, muted = true)
+
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun unmuteConversation(conversationId: String): FastrelayConversationMember =
+        setConversationNotificationsMuted(conversationId, muted = false)
+
+    private suspend fun setConversationNotificationsMuted(
+        conversationId: String,
+        muted: Boolean,
+    ): FastrelayConversationMember =
+        requestJson(
+            HttpMethod.Put,
+            "/v1/conversations/${enc(conversationId)}/notifications",
+            body = UpdateConversationNotificationsRequest(muted),
+        )
+
     @Throws(FastrelayApiError::class, CancellationException::class)
     suspend fun sendMessage(
         conversationId: String,
@@ -1031,6 +1055,36 @@ class FastrelayClient(
     @Throws(FastrelayApiError::class, CancellationException::class)
     suspend fun deleteMessage(messageId: String) =
         requestUnit(HttpMethod.Delete, "/v1/messages/${enc(messageId)}")
+
+    /**
+     * Adds the current user's reaction of [type] (1–64 characters, e.g. an emoji) and returns the
+     * message. Adding one you already hold changes nothing; a message holds at most 25 types.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun addMessageReaction(messageId: String, type: String): FastrelayMessage =
+        requestJson(HttpMethod.Post, "/v1/messages/${enc(messageId)}/reactions", body = ReactionRequest(type))
+
+    /** Removes the current user's reaction of [type] and returns the message. */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun removeMessageReaction(messageId: String, type: String): FastrelayMessage =
+        requestJson(HttpMethod.Delete, "/v1/messages/${enc(messageId)}/reactions/${enc(type)}")
+
+    /**
+     * Lists the ids of the users who added [type], in the order they reacted, up to 100 per page.
+     * [cursor] is the previous page's `nextCursor`.
+     */
+    @Throws(FastrelayApiError::class, CancellationException::class)
+    suspend fun listMessageReactionUsers(
+        messageId: String,
+        type: String,
+        cursor: String? = null,
+        limit: Int? = null,
+    ): CursorPage<String> =
+        requestJson(
+            HttpMethod.Get,
+            "/v1/messages/${enc(messageId)}/reactions/${enc(type)}",
+            query = mapOf("cursor" to cursor, "limit" to limit?.toString()),
+        )
 
     /**
      * Advances the read cursor to [seq], or to the latest message when null. For a fire-and-forget

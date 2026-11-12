@@ -21,6 +21,8 @@ private const val CONVERSATION_JSON =
     """{"id":"cnv_1","kind":"group","type":"messaging","custom":{},"presenceEnabled":false,"frozen":false,"lastMessageSeq":0,"memberCount":2,"createdAt":"2026-11-04T10:00:00Z","updatedAt":"2026-11-04T10:00:00Z"}"""
 private const val MESSAGE_JSON =
     """{"id":"msg_1","conversationId":"cnv_1","seq":7,"type":"regular","silent":false,"userId":"alex","text":"hi","custom":{},"createdAt":"2026-11-04T10:00:00Z","updatedAt":"2026-11-04T10:00:00Z"}"""
+private const val REACTED_MESSAGE_JSON =
+    """{"id":"msg_1","conversationId":"cnv_1","seq":7,"type":"regular","silent":false,"userId":"alex","text":"hi","custom":{},"reactions":{"❤️":["alex"]},"reactionCounts":{"❤️":1},"createdAt":"2026-11-04T10:00:00Z","updatedAt":"2026-11-04T10:00:00Z"}"""
 private const val MEMBER_JSON =
     """{"userId":"bo","role":"moderator","joinedAt":"2026-11-04T10:00:00Z"}"""
 private const val TOTALS_JSON = """{"totalUnread":3,"unreadConversations":1}"""
@@ -203,6 +205,77 @@ class ChatSurfaceTest {
 
         rec.sdk.deleteMessage("msg_1")
         assertEquals(HttpMethod.Delete to "/v1/messages/msg_1", rec.last.method to rec.last.url.encodedPath)
+    }
+
+    @Test
+    fun messageReactionsAddAndRemoveEncodeTheType() = runTest {
+        // given
+        val rec = chatClient(REACTED_MESSAGE_JSON)
+
+        // when
+        val added = rec.sdk.addMessageReaction("msg_1", "❤️")
+
+        // then
+        assertEquals(HttpMethod.Post to "/v1/messages/msg_1/reactions", rec.last.method to rec.last.url.encodedPath)
+        assertEquals("""{"type":"❤️"}""", rec.last.bodyText())
+        assertEquals(listOf("alex"), added.reactions["❤️"])
+        assertEquals(1, added.reactionCounts["❤️"])
+
+        // when
+        rec.sdk.removeMessageReaction("msg_1", "❤️")
+
+        // then
+        assertEquals(
+            HttpMethod.Delete to "/v1/messages/msg_1/reactions/%E2%9D%A4%EF%B8%8F",
+            rec.last.method to rec.last.url.encodedPath,
+        )
+    }
+
+    @Test
+    fun listMessageReactionUsersPagesWithCursorAndLimit() = runTest {
+        // given
+        val rec = chatClient("""{"data":["alex","bo"],"nextCursor":"102","hasMore":true}""")
+
+        // when
+        val page = rec.sdk.listMessageReactionUsers("msg_1", "❤️", cursor = "100", limit = 2)
+
+        // then
+        assertEquals(
+            HttpMethod.Get to "/v1/messages/msg_1/reactions/%E2%9D%A4%EF%B8%8F",
+            rec.last.method to rec.last.url.encodedPath,
+        )
+        assertEquals("100", rec.last.url.parameters["cursor"])
+        assertEquals("2", rec.last.url.parameters["limit"])
+        assertEquals(listOf("alex", "bo"), page.data)
+        assertEquals("102", page.nextCursor)
+
+        // when
+        rec.sdk.listMessageReactionUsers("msg_1", "❤️")
+
+        // then
+        assertNull(rec.last.url.parameters["cursor"])
+        assertNull(rec.last.url.parameters["limit"])
+    }
+
+    @Test
+    fun muteAndUnmuteConversationPutNotifications() = runTest {
+        // given
+        val rec = chatClient("""{"userId":"alex","role":"member","joinedAt":"2026-11-04T10:00:00Z","notificationsMuted":true}""")
+
+        // when
+        val member = rec.sdk.muteConversation("cnv_1")
+
+        // then
+        assertEquals(HttpMethod.Put to "/v1/conversations/cnv_1/notifications", rec.last.method to rec.last.url.encodedPath)
+        assertEquals("""{"muted":true}""", rec.last.bodyText())
+        assertEquals(true, member.notificationsMuted)
+
+        // when
+        rec.sdk.unmuteConversation("cnv_1")
+
+        // then
+        assertEquals(HttpMethod.Put to "/v1/conversations/cnv_1/notifications", rec.last.method to rec.last.url.encodedPath)
+        assertEquals("""{"muted":false}""", rec.last.bodyText())
     }
 
     @Test
