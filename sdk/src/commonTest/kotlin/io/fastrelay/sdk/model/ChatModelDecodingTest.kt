@@ -65,6 +65,32 @@ class ChatModelDecodingTest {
     }
 
     @Test
+    fun decodesMessageReactionsAndDefaultsThemToEmpty() {
+        // given
+        val reacted = """
+            {"id": "msg_4", "conversationId": "cnv_1", "seq": 4, "type": "regular", "silent": false, "userId": "bo",
+             "text": "done", "custom": {}, "reactions": {"❤️": ["alex", "cy"], "👍": ["alex"]},
+             "reactionCounts": {"❤️": 120, "👍": 1},
+             "createdAt": "2026-11-04T10:00:00Z", "updatedAt": "2026-11-04T10:02:00Z"}
+        """.trimIndent()
+        val plain = """
+            {"id": "msg_5", "conversationId": "cnv_1", "seq": 5, "type": "regular", "silent": false, "userId": "bo",
+             "text": "ok", "custom": {}, "createdAt": "2026-11-04T10:00:00Z", "updatedAt": "2026-11-04T10:00:00Z"}
+        """.trimIndent()
+
+        // when
+        val withReactions = FastrelayJson.decodeFromString<FastrelayMessage>(reacted)
+        val withoutReactions = FastrelayJson.decodeFromString<FastrelayMessage>(plain)
+
+        // then
+        assertEquals(listOf("alex", "cy"), withReactions.reactions["❤️"])
+        assertEquals(120, withReactions.reactionCounts["❤️"])
+        assertEquals(1, withReactions.reactionCounts["👍"])
+        assertTrue(withoutReactions.reactions.isEmpty())
+        assertTrue(withoutReactions.reactionCounts.isEmpty())
+    }
+
+    @Test
     fun decodesSystemMessageWithoutUserOrText() {
         val json = """
             {"id": "msg_3", "conversationId": "cnv_1", "seq": 3, "type": "system", "silent": false,
@@ -99,6 +125,7 @@ class ChatModelDecodingTest {
         assertNull(member.user)
         assertNull(member.lastDeliveredSeq)
         assertNull(member.online)
+        assertNull(member.notificationsMuted)
 
         val preview = FastrelayJson.decodeFromString<FastrelayReplyPreview>("""{"id":"msg_1","deleted":true}""")
         assertTrue(preview.deleted)

@@ -8,7 +8,7 @@ The SDK is published to Maven Central:
 
 ```kotlin
 dependencies {
-    implementation("io.fastrelay:fastrelay-kotlin-sdk:1.0.0")
+    implementation("io.fastrelay:fastrelay-kotlin-sdk:1.1.0")
 }
 ```
 
@@ -107,6 +107,10 @@ client.getUnreadTotals()
 ```
 
 Members: `listConversationMembers`, `addConversationMembers`, `updateConversationMember` (role, `banned`/`muted`/`none`), `removeConversationMember` (your own id leaves). Conversations: `getConversation`, `updateConversation`, `truncateConversation`, `deleteConversation`. Messages: `updateMessage`, `deleteMessage`.
+
+**Reactions:** `addMessageReaction(messageId, "❤️")` and `removeMessageReaction(messageId, "❤️")` return the updated message. A message's `reactions` maps each type to the first 100 users who added it and `reactionCounts` to the totals; `listMessageReactionUsers(messageId, type, cursor, limit)` pages the rest. A reaction change arrives as a `message.updated` event and through `syncChat`.
+
+**Notification mute:** `muteConversation(conversationId)` / `unmuteConversation(conversationId)` turn push off for you only. Messages still arrive and count as unread; `message.created` webhooks carry `notificationsMuted` per recipient, and your own member row shows `notificationsMuted`.
 
 **Realtime chat events** arrive on `realtime.chatEvents` without subscribing. Each `FastrelayChatEvent` has `type`, `conversationId` (absent for `presence.changed` and `unread.updated`), `eventId`, `createdAt`, the raw `data`, and typed accessors — `message`, `conversation`, `member`, `userId`, `userIds`, `online`, `lastActiveAt`, `lastDeliveredSeq`/`lastDeliveredAt`/`lastReadSeq`/`lastReadAt`, `totals` — that return null when absent. Unknown types are still delivered with their raw `data`.
 
